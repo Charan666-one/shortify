@@ -235,14 +235,14 @@
 
     .btn-shorten:active { transform: translateY(0); }
 
-    .btn-shorten.loading {
+    .btn-shorten:disabled {
       opacity: 0.7;
       cursor: not-allowed;
       pointer-events: none;
     }
 
     .btn-shorten svg { transition: transform 0.2s; }
-    .btn-shorten:hover svg { transform: rotate(-15deg); }
+    .btn-shorten:hover:not(:disabled) svg { transform: rotate(-15deg); }
 
     #resultBox {
       display: none;
@@ -535,7 +535,7 @@
 
     <div class="row-two">
       <div class="custom-input-wrap">
-        <span class="custom-prefix">localhost:8000/</span>
+        <span class="custom-prefix" id="prefixDisplay"></span>
         <input type="text" id="customInput" placeholder="custom-code (optional)" autocomplete="off" spellcheck="false" />
       </div>
       <button class="btn-shorten" id="shortenBtn" onclick="shorten()">
@@ -592,182 +592,164 @@
 <div class="toast" id="toast"></div>
 
 <script>
-let history = JSON.parse(localStorage.getItem('snip_history') || '[]');
-let lastShortURL = '';
+  // ✅ Always use the current page's origin — works for localhost, 127.0.0.1, and production
+  const API_BASE = window.location.origin;
 
-renderHistory();
-updateStats();
+  // Update prefix display to match actual host
+  document.getElementById('prefixDisplay').textContent =
+    `${window.location.hostname}${window.location.port ? ':' + window.location.port : ''}/`;
 
-async function shorten() {
-    const url = document.getElementById('urlInput').value.trim();
-    const custom = document.getElementById('customInput').value.trim();
+  // 🔹 Local storage for history
+  const STORAGE_KEY = 'url_shortener_history';
 
-    if (!url) {
-        showToast('⚠ Please enter a URL first');
-        return;
-    }
+  function showToast(message, type = 'success') {
+    const toast = document.getElementById('toast');
+    toast.textContent = message;
+    toast.className = `toast show ${type}`;
+    setTimeout(() => toast.classList.remove('show'), 3000);
+  }
 
-    if (!isValidURL(url)) {
-        showToast('⚠ Enter a valid URL (include https://)');
-        return;
-    }
+  async function shorten() {
+    const originalUrl = document.getElementById('urlInput').value.trim();
+    const customCode  = document.getElementById('customInput').value.trim();
+    const btn         = document.getElementById('shortenBtn');
 
-    const btn = document.getElementById('shortenBtn');
-    btn.classList.add('loading');
-    btn.innerHTML = '<div class="spinner"></div> Working...';
+    if (!originalUrl) { showToast('Please enter a URL', 'error'); return; }
+
+    btn.disabled = true;
+    const originalHTML = btn.innerHTML;
+    btn.innerHTML = '<div class="spinner"></div> Shortening...';
 
     try {
-        // ✅ FIXED: Correct backend URL
-        let endpoint = `http://127.0.0.1:8000/shorten?original_url=${encodeURIComponent(url)}`;
-        if (custom) {
-            endpoint += `&custom=${encodeURIComponent(custom)}`;
-        }
+      const response = await fetch(`${API_BASE}/api/shorten`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ original_url: originalUrl, custom: customCode || null })
+      });
 
-        const res = await fetch(endpoint, {
-            method: 'POST'
-        });
+      const data = await response.json();
 
-        const data = await res.json();
+      if (!response.ok) {
+        const msg = data.error || data.detail || 'Failed to shorten URL';
+        showToast(msg, 'error');
+        showError(msg);
+        return;
+      }
 
-        if (data.short_url) {
-            showResult(data.short_url);
-            addToHistory(url, data.short_url);
-            showToast('✓ Link shortened successfully');
-
-            document.getElementById('urlInput').value = '';
-            document.getElementById('customInput').value = '';
-        } else {
-            showError(data.error || 'Something went wrong');
-        }
-
+      displayResult(data.short_url, data.short_code);
+      addToHistory(data.short_code, data.original_url);
+      updateStats();
+      showToast('URL shortened successfully!');
+      clearInputs();
     } catch (err) {
-        showError('❌ Could not connect to server. Is backend running?');
+      console.error('Error:', err);
+      const msg = `Failed to connect to server at ${API_BASE}`;
+      showToast(msg, 'error');
+      showError(msg);
     } finally {
-        btn.classList.remove('loading');
-        btn.innerHTML = `
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-        </svg>
-        Shorten`;
+      btn.disabled = false;
+      btn.innerHTML = originalHTML;
     }
-}
+  }
 
-function isValidURL(url) {
-    try {
-        const u = new URL(url);
-        return ['http:', 'https:'].includes(u.protocol);
-    } catch {
-        return false;
-    }
-}
+  function displayResult(shortUrl) {
+    const resultBox   = document.getElementById('resultBox');
+    const resultLink  = document.getElementById('resultLink');
+    const resultInner = document.getElementById('resultInner');
 
-function showResult(shortURL) {
-    lastShortURL = shortURL;
-
-    const box = document.getElementById('resultBox');
-    const inner = document.getElementById('resultInner');
-
-    inner.className = 'result-inner';
-    inner.innerHTML = `
-        <a href="${shortURL}" target="_blank" class="result-url">${shortURL}</a>
-        <button class="btn-copy" onclick="copyURL()">Copy</button>
+    // Rebuild inner HTML in case a previous error replaced it
+    resultInner.innerHTML = `
+      <a href="${shortUrl}" id="resultLink" class="result-url" target="_blank">${shortUrl}</a>
+      <button class="btn-copy" id="copyBtn" onclick="copyURL()">Copy</button>
     `;
+    resultInner.classList.remove('error');
+    resultBox.style.display = 'block';
+  }
 
-    box.style.display = 'block';
-}
+  function showError(message) {
+    const resultBox   = document.getElementById('resultBox');
+    const resultInner = document.getElementById('resultInner');
+    resultInner.classList.add('error');
+    resultInner.innerHTML = `<span class="result-error-text">❌ ${message}</span>`;
+    resultBox.style.display = 'block';
+  }
 
-function showError(msg) {
-    const box = document.getElementById('resultBox');
-    const inner = document.getElementById('resultInner');
+  function copyURL() {
+    const link = document.getElementById('resultLink');
+    navigator.clipboard.writeText(link.href).then(() => {
+      const btn = document.getElementById('copyBtn');
+      btn.textContent = '✓ Copied!';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+    }).catch(() => showToast('Failed to copy URL', 'error'));
+  }
 
-    inner.className = 'result-inner error';
-    inner.innerHTML = `<span class="result-error-text">${msg}</span>`;
+  function clearInputs() {
+    document.getElementById('urlInput').value  = '';
+    document.getElementById('customInput').value = '';
+  }
 
-    box.style.display = 'block';
-}
-
-function copyURL() {
-    if (!lastShortURL) return;
-
-    navigator.clipboard.writeText(lastShortURL).then(() => {
-        showToast('✓ Copied to clipboard');
-    });
-}
-
-function addToHistory(original, shortURL) {
-    const code = shortURL.split('/').pop();
-
-    history.unshift({
-        original,
-        shortURL,
-        code,
-        clicks: 0,
-        ts: Date.now()
-    });
-
-    if (history.length > 10) {
-        history = history.slice(0, 10);
-    }
-
-    localStorage.setItem('snip_history', JSON.stringify(history));
-
+  function addToHistory(shortCode, originalUrl) {
+    let history = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    history = history.filter(i => i.shortCode !== shortCode);
+    history.unshift({ shortCode, originalUrl, createdAt: new Date().toISOString(), clicks: 0 });
+    history = history.slice(0, 10);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
     renderHistory();
-    updateStats();
-}
+  }
 
-function renderHistory() {
-    const list = document.getElementById('historyList');
+  function renderHistory() {
+    const history     = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    const historyList = document.getElementById('historyList');
 
     if (!history.length) {
-        list.innerHTML = `
+      historyList.innerHTML = `
         <div class="empty-state">
-            <div class="empty-icon">🔗</div>
-            <div class="empty-text">Your shortened links will appear here</div>
+          <div class="empty-icon">🔗</div>
+          <div class="empty-text">Your shortened links will appear here</div>
         </div>`;
-        return;
+      return;
     }
 
-    list.innerHTML = history.map(item => `
+    historyList.innerHTML = history.map(item => {
+      const shortUrl       = `${API_BASE}/${item.shortCode}`;
+      const originalPreview = item.originalUrl.length > 40
+        ? item.originalUrl.substring(0, 40) + '...'
+        : item.originalUrl;
+      return `
         <div class="history-item">
-            <div class="history-content">
-                <a href="${item.shortURL}" target="_blank" class="history-short">${item.shortURL}</a>
-                <div class="history-original">${item.original}</div>
-            </div>
-        </div>
-    `).join('');
-}
+          <div class="history-icon">🔗</div>
+          <div class="history-content">
+            <a href="${shortUrl}" target="_blank" class="history-short">${shortUrl}</a>
+            <div class="history-original" title="${item.originalUrl}">${originalPreview}</div>
+          </div>
+          <div class="history-clicks"><span>${item.clicks || 0}</span> clicks</div>
+        </div>`;
+    }).join('');
+  }
 
-function clearHistory() {
-    history = [];
-    localStorage.removeItem('snip_history');
+  function clearHistory() {
+    if (confirm('Clear all history?')) {
+      localStorage.removeItem(STORAGE_KEY);
+      renderHistory();
+      updateStats();
+      showToast('History cleared');
+    }
+  }
+
+  function updateStats() {
+    const history = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    document.getElementById('statTotal').textContent  = history.length;
+    document.getElementById('statClicks').textContent = history.reduce((s, i) => s + (i.clicks || 0), 0);
+    document.getElementById('statRecent').textContent = history.length ? history[0].shortCode : '—';
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
     renderHistory();
     updateStats();
-    showToast('History cleared');
-}
-
-function updateStats() {
-    document.getElementById('statTotal').textContent = history.length;
-    document.getElementById('statClicks').textContent =
-        history.reduce((sum, item) => sum + (item.clicks || 0), 0);
-    document.getElementById('statRecent').textContent =
-        history.length ? history[0].code : '—';
-}
-
-function showToast(msg) {
-    const t = document.getElementById('toast');
-    t.textContent = msg;
-    t.classList.add('show');
-    setTimeout(() => t.classList.remove('show'), 2000);
-}
-
-// Enter key support
-document.getElementById('urlInput').addEventListener('keydown', e => {
-    if (e.key === 'Enter') shorten();
-});
-document.getElementById('customInput').addEventListener('keydown', e => {
-    if (e.key === 'Enter') shorten();
-});
+    document.getElementById('urlInput').addEventListener('keypress',    e => { if (e.key === 'Enter') shorten(); });
+    document.getElementById('customInput').addEventListener('keypress', e => { if (e.key === 'Enter') shorten(); });
+  });
 </script>
 </body>
 </html>
