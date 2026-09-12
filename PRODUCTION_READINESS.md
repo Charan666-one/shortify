@@ -3,6 +3,8 @@
 Status: **not production ready**. This document tracks what stands between the
 current code and a deployment that can be trusted with real links.
 
+**Progress:** Phase 1 complete (6/6). Phases 2-6 open, 24 items remaining.
+
 - **Baseline:** commit `7d2c0a1` — the last state before hardening began.
   `git checkout 7d2c0a1` restores it at any time. The annotated tag
   `v0.1.0-baseline` marks it; if your clone does not have the tag, recreate and
@@ -23,32 +25,35 @@ project to review the later changes.
 
 Nothing here changes behaviour, and all of it blocks collaboration.
 
-- [ ] **Untrack `.venv/`.** 1,681 of the 1,691 tracked files are a committed
+- [x] **Untrack `.venv/`.** 1,681 of the 1,691 tracked files are a committed
       virtualenv, and it does not work anywhere but the machine that made it:
       `.venv/pyvenv.cfg` declares `home = /Library/Developer/CommandLineTools`
       and `version = 3.9.6`, while `.venv/bin/python3.12` symlinks to
       `/opt/anaconda3/bin/python3.12` and `site-packages` holds 3.12 wheels.
       *Verified:* every `.venv/bin/*` entry point fails on a clean checkout.
       `git rm -r --cached .venv`
-- [ ] **Fix `.gitignore`.** Two entries are wrong:
+- [x] **Fix `.gitignore`.** Two entries are wrong:
       - line 3 reads `**pycache**/` (markdown mangling) and matches nothing —
         it must be `__pycache__/`
       - line 8 reads `venv/`, which never matched the actual `.venv/` directory
       Add `.env` and `*.db` is already present.
-- [ ] **Untrack `.env`, add `.env.example`.** The committed `.env` holds only
+- [x] **Untrack `.env`, add `.env.example`.** The committed `.env` holds only
       localhost development values today, so nothing is currently leaked — but
       `requirements.txt` already carries `psycopg2-binary`, and the first real
       `DATABASE_URL` written to that file would be committed with it.
-- [ ] **Delete `package-lock.json`.** An empty stub (`"packages": {}`) with no
+- [x] **Delete `package-lock.json`.** An empty stub (`"packages": {}`) with no
       Node tooling anywhere in the project.
-- [ ] **Rename `Execution steps /`.** The directory name carries a trailing
+- [x] **Rename `Execution steps /`.** The directory name carries a trailing
       space and holds a PDF; neither is scriptable. Convert the command list to
       markdown at `docs/commands.md`.
-- [ ] **Add a `LICENSE`.** The README invites forks and contributions, which
+- [x] **Add a `LICENSE`.** The README invites forks and contributions, which
       nobody can legally act on without one.
 
-**Done when:** `git ls-files | wc -l` reports single digits, and a fresh clone
-plus `python -m venv .venv && pip install -r requirements.txt` runs the app.
+**Done:** tracked files went from 1,691 to 11. Verified by cloning the branch
+fresh and following `docs/commands.md` verbatim — dependencies install, the
+server starts, shorten/redirect/stats all answer, and `git status` is still
+clean afterwards, so the new ignore rules hold. Neither `.venv/` nor `.env`
+appears in the clone.
 
 ---
 
