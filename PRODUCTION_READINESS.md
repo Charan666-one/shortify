@@ -3,9 +3,9 @@
 Status: **not production ready**. This document tracks what stands between the
 current code and a deployment that can be trusted with real links.
 
-**Progress:** Phases 1-3 complete (15/30). Phases 4-6 open, 15 items remaining.
-The service is correct and tested now; what is left is hardening it against
-abuse (Phase 4) and running it somewhere (Phase 5).
+**Progress:** Phases 1-4 complete (21/30). Phases 5-6 open, 9 items remaining.
+The service is correct, tested and hardened; what is left is running it
+somewhere (Phase 5) and describing it accurately (Phase 6).
 
 - **Baseline:** commit `7d2c0a1` — the last state before hardening began.
   `git checkout 7d2c0a1` restores it at any time. The annotated tag
@@ -137,25 +137,43 @@ committed.
 
 ## Phase 4 — Security (P1)
 
-- [ ] **Escape frontend output.** `static/index.html:661` and `:714-727`
+- [x] **Escape frontend output.** `static/index.html:661` and `:714-727`
       interpolate the short URL and the original URL into `innerHTML` unescaped.
       `https://x.com/"><img src=x onerror=...>` passes `is_valid_url` — scheme and
       netloc are both valid — and then executes on render. Scope is self-XSS,
       since history lives in per-browser `localStorage`, but it is still an
       injection. Use `textContent` and build elements rather than string
       concatenation.
-- [ ] **Rate-limit `POST /api/shorten`.** Unauthenticated and unbounded; one
+- [x] **Rate-limit `POST /api/shorten`.** Unauthenticated and unbounded; one
       script fills the database. `slowapi` is the usual answer for FastAPI.
-- [ ] **Block internal redirect targets.** `is_valid_url` (`main.py:107`) accepts
+- [x] **Block internal redirect targets.** `is_valid_url` (`main.py:107`) accepts
       any `http(s)` host, including `169.254.169.254`, `localhost` and RFC1918
       addresses. Resolve and reject private, loopback and link-local targets.
-- [ ] **Tighten CORS for production.** `main.py:50` already narrows to
+- [x] **Tighten CORS for production.** `main.py:50` already narrows to
       `FRONTEND_URL` outside development — confirm `ENVIRONMENT` is actually set
       in the deployment, or the permissive development list ships.
-- [ ] **Drop `allow_credentials=True`** (`main.py:51`) unless cookies are added
+- [x] **Drop `allow_credentials=True`** (`main.py:51`) unless cookies are added
       later; nothing in the app authenticates today.
-- [ ] **Add link expiry.** An immortal, anonymous redirect service is a phishing
+- [x] **Add link expiry.** An immortal, anonymous redirect service is a phishing
       asset. An `expires_at` column with a default TTL bounds the damage.
+
+**Done:** 35 tests added, 80 in total. The XSS fix was verified in Chromium
+rather than by reading the diff — with `https://example.com/"><img src=x
+onerror=...>` as the target, the baseline page sets `window.__pwned` and injects
+two elements into the history list, while the fixed page executes nothing and
+renders the payload as text.
+
+Two limits worth stating plainly:
+
+- The rate limiter counts in one process. Behind N workers the effective limit
+  is N times the configured number. A shared store belongs with the second
+  worker, not before it.
+- Target blocking resolves DNS at creation time, so a name re-pointed at an
+  internal address afterwards still gets through, and DNS failures are allowed
+  through by design. It stops the copy-paste cases, not a determined attacker.
+
+`expires_at` is a second column that `create_all()` will not add to an existing
+database — the same migration caveat as `created_at`.
 
 ---
 
