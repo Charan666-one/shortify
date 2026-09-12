@@ -15,3 +15,5 @@ class URL(Base):
         server_default=func.now(),
         nullable=False,
     )
+    # NULL means the link never expires.
+    expires_at = Column(DateTime(timezone=True), nullable=True, index=True)

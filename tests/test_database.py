@@ -31,3 +31,18 @@ def test_postgres_gets_no_sqlite_arguments():
 
 def test_health_endpoint_reports_the_environment(client):
     assert client.get("/health").json() == {"status": "ok", "environment": "development"}
+
+
+def test_every_setting_is_documented_in_env_example():
+    """A setting nobody can discover is a setting nobody configures."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    source = (root / "main.py").read_text() + (root / "database.py").read_text()
+    used = set(re.findall(r'os\.getenv\("([A-Z_]+)"', source))
+    documented = set(re.findall(
+        r"^([A-Z_]+)=", (root / ".env.example").read_text(), re.MULTILINE
+    ))
+
+    assert not used - documented, f"undocumented settings: {sorted(used - documented)}"

@@ -19,6 +19,22 @@ from database import engine  # noqa: E402
 from models import Base  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def rate_limit_out_of_the_way():
+    """Keep the limiter from bleeding across tests.
+
+    Every test calls from the same client address, so the real 20/minute limit
+    would make results depend on how many requests earlier tests happened to
+    make. Tests that care about the limit set it themselves.
+    """
+    original = main.shorten_limiter.limit
+    main.shorten_limiter.limit = 10_000
+    main.shorten_limiter.reset()
+    yield
+    main.shorten_limiter.limit = original
+    main.shorten_limiter.reset()
+
+
 @pytest.fixture
 def client():
     """A client backed by an empty database, rebuilt for every test."""
