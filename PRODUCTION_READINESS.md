@@ -3,7 +3,9 @@
 Status: **not production ready**. This document tracks what stands between the
 current code and a deployment that can be trusted with real links.
 
-**Progress:** Phase 1 complete (6/6). Phases 2-6 open, 24 items remaining.
+**Progress:** Phases 1-3 complete (15/30). Phases 4-6 open, 15 items remaining.
+The service is correct and tested now; what is left is hardening it against
+abuse (Phase 4) and running it somewhere (Phase 5).
 
 - **Baseline:** commit `7d2c0a1` — the last state before hardening began.
   `git checkout 7d2c0a1` restores it at any time. The annotated tag
@@ -61,40 +63,51 @@ appears in the clone.
 
 Each item below is a defect reproduced against the running service.
 
-- [ ] **Honour `DATABASE_URL`.** `main.py:23` reads the variable; `database.py:6`
+- [x] **Honour `DATABASE_URL`.** `main.py:23` reads the variable; `database.py:6`
       hardcodes `sqlite:///./urls.db` and ignores it. Consequence: deploying with
       a Postgres URL set silently keeps writing to a local SQLite file, so every
       link is lost on redeploy — the standard failure on Render, Fly and Heroku.
       Apply `connect_args={"check_same_thread": False}` only when the URL is
       SQLite. This is what makes `psycopg2-binary` in `requirements.txt` mean
       something.
-- [ ] **Reject reserved short codes.** *Verified:* `custom: "health"` and
+- [x] **Reject reserved short codes.** *Verified:* `custom: "health"` and
       `custom: "docs"` both return 201 and persist, but `GET /health` and
       `GET /docs` continue to hit their own routes — the link is created, stored,
       billed to the user, and permanently dead. Reserve at minimum
       `health`, `docs`, `redoc`, `openapi.json`, `api`, `static`, and reject with
       409 at `main.py:157`.
-- [ ] **Validate the short-code charset.** `main.py:157-169` checks length only.
+- [x] **Validate the short-code charset.** `main.py:157-169` checks length only.
       *Verified:* `a/b` is accepted and then unreachable (`GET /a/b` → 404), and
       `<script>x` is accepted verbatim. Require `^[A-Za-z0-9_-]{3,50}$`.
-- [ ] **Redirect with 302, not 301.** `main.py:267` issues a permanent redirect,
+- [x] **Redirect with 302, not 301.** `main.py:267` issues a permanent redirect,
       which browsers cache indefinitely: repeat visits never reach the service,
       so click counts silently undercount, and a link can never be retargeted or
       taken down once anyone has followed it. Use `302` (or `307`).
-- [ ] **Add the `created_at` column.** `URLStatsResponse` declares the field
+- [x] **Add the `created_at` column.** `URLStatsResponse` declares the field
       (`main.py:83`) but `models.py` has no such column, and the `hasattr` guard
       at `main.py:219` turns the gap into the string `"N/A"`. *Verified:* the
       stats endpoint returns `"created_at": "N/A"` for every link. Add
       `created_at = Column(DateTime, server_default=func.now())` and drop the
       guard.
-- [ ] **Handle `IntegrityError` on insert.** Both the custom-code check
+- [x] **Handle `IntegrityError` on insert.** Both the custom-code check
       (`main.py:164`) and `generate_unique_code` (`main.py:96-105`) query and
       then insert without a transaction. Two concurrent requests for the same
       code hit the unique index and the loser gets a 500. Catch, retry once for
       generated codes, return 409 for custom ones.
 
-**Done when:** each of the six has a regression test in Phase 3 that fails
-against `v0.1.0-baseline`.
+**Done:** verified by replaying the Phase 3 suite over the `v0.1.0-baseline`
+sources — 8 tests fail there and `tests/test_validation.py` cannot even import,
+while the 10 that still pass are the round-trip basics that always worked.
+
+Two of these fixes were changed by their own tests before landing: reserved
+names containing a dot reported a charset error instead of a conflict, and
+testing the Postgres branch by constructing a real engine required `psycopg2`
+to be installed, which is why `engine_options()` is a pure function.
+
+One caveat carried forward: `created_at` reaches new databases only.
+`Base.metadata.create_all()` creates tables but never alters them, so an
+existing deployment needs the Alembic migration in Phase 5 before it sees the
+column.
 
 ---
 
@@ -102,19 +115,23 @@ against `v0.1.0-baseline`.
 
 There is currently no test of any kind.
 
-- [ ] **Add `pytest` + `httpx` and a `TestClient` suite** against an in-memory
+- [x] **Add `pytest` + `httpx` and a `TestClient` suite** against an in-memory
       SQLite database, covering: shorten → redirect → stats round trip; invalid
       and non-`http(s)` URLs; duplicate custom code → 409; reserved code → 409;
       bad charset → 400; unknown code → 404; click increment on redirect.
-- [ ] **Add a GitHub Actions workflow** running `ruff` and `pytest` on push and
+- [x] **Add a GitHub Actions workflow** running `ruff` and `pytest` on push and
       pull request.
-- [ ] **Pin dependencies.** `requirements.txt` uses `>=` throughout, so two
+- [x] **Pin dependencies.** `requirements.txt` uses `>=` throughout, so two
       installs a month apart produce different builds. Pin exact versions and
       keep the floors in a separate constraints file if you want Dependabot to
       manage them.
 
-**Done when:** CI is green on a pull request and red when a Phase 2 fix is
-reverted.
+**Done:** `.github/workflows/ci.yml` lints with ruff, runs the suite on Python
+3.11 and 3.12, then starts the real server and drives one shorten-and-redirect
+round trip asserting a 302 — the class of breakage a test suite cannot see (a
+bad uvicorn entrypoint, a missing static file). Every step was run locally
+against a clean virtualenv built from the pinned requirements before it was
+committed.
 
 ---
 
