@@ -1,25 +1,47 @@
+"""Database engine and session factory.
+
+The connection string comes from DATABASE_URL so the same code runs against
+SQLite locally and Postgres in production. load_dotenv() is called here rather
+than relying on main.py: this module is imported at the top of main.py, before
+main.py's own load_dotenv() runs, so without it a .env-supplied DATABASE_URL
+would be read too late and silently ignored.
+"""
+
+import os
+
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.pool import StaticPool
 
-# SQLite database URL
+load_dotenv()
 
-DATABASE_URL = "sqlite:///./urls.db"
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./urls.db")
 
-# Create engine
+def engine_options(url: str) -> dict:
+    """Per-backend create_engine() arguments.
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False}  # needed for SQLite
-)
+    SQLite needs check_same_thread disabled because FastAPI serves sync
+    handlers from a thread pool, and an in-memory database additionally needs
+    every connection to be the same one — a fresh connection would open a
+    separate empty database and see no schema at all. Postgres needs neither,
+    and passing SQLite's arguments to it raises on connect.
+    """
+    if not url.startswith("sqlite"):
+        return {}
 
-# Create session
+    options = {"connect_args": {"check_same_thread": False}}
+    if ":memory:" in url:
+        options["poolclass"] = StaticPool
+    return options
+
+
+engine = create_engine(DATABASE_URL, **engine_options(DATABASE_URL))
 
 SessionLocal = sessionmaker(
     autocommit=False,
     autoflush=False,
-    bind=engine
+    bind=engine,
 )
-
-# Base class for models
 
 Base = declarative_base()
