@@ -1,6 +1,8 @@
-fastapi>=0.109.0
-uvicorn>=0.27.0
-sqlalchemy>=2.0.25
-psycopg2-binary>=2.9.9
-python-dotenv>=1.0.0
-pydantic>=2.5.3
+# Runtime dependencies, pinned so every install is reproducible.
+# Versions are those resolved and verified on 2026-09-12 with Python 3.11.
+fastapi==0.141.1
+uvicorn==0.52.4
+SQLAlchemy==2.0.52
+psycopg2-binary==2.9.13
+python-dotenv==1.2.3
+pydantic==2.13.5

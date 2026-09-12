@@ -1,6 +1,6 @@
-# Development and CI dependencies. Install alongside requirements.txt:
-#   pip install -r requirements.txt -r requirements-dev.txt
+# Development and CI dependencies. Install alongside the runtime set:
+#   pip install -r requirements-dev.txt
 -r requirements.txt
-pytest==9.0.1
+pytest==9.1.1
 httpx==0.28.1
-ruff==0.15.1
+ruff==0.16.7
