@@ -652,16 +652,31 @@
     }
   }
 
+  // Server-supplied text is written with textContent and never as markup: a
+  // URL like https://x.com/"><img src=x onerror=...> passes the backend's
+  // scheme-and-host check and would otherwise execute when rendered here.
   function displayResult(shortUrl) {
     const resultBox   = document.getElementById('resultBox');
-    const resultLink  = document.getElementById('resultLink');
     const resultInner = document.getElementById('resultInner');
 
-    // Rebuild inner HTML in case a previous error replaced it
-    resultInner.innerHTML = `
-      <a href="${shortUrl}" id="resultLink" class="result-url" target="_blank">${shortUrl}</a>
-      <button class="btn-copy" id="copyBtn" onclick="copyURL()">Copy</button>
-    `;
+    // Rebuild the contents in case a previous error replaced them
+    resultInner.replaceChildren();
+
+    const link = document.createElement('a');
+    link.id = 'resultLink';
+    link.className = 'result-url';
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.href = shortUrl;
+    link.textContent = shortUrl;
+
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'btn-copy';
+    copyBtn.id = 'copyBtn';
+    copyBtn.textContent = 'Copy';
+    copyBtn.addEventListener('click', copyURL);
+
+    resultInner.append(link, copyBtn);
     resultInner.classList.remove('error');
     resultBox.style.display = 'block';
   }
@@ -669,8 +684,14 @@
   function showError(message) {
     const resultBox   = document.getElementById('resultBox');
     const resultInner = document.getElementById('resultInner');
+
+    resultInner.replaceChildren();
+    const span = document.createElement('span');
+    span.className = 'result-error-text';
+    span.textContent = `❌ ${message}`;
+    resultInner.append(span);
+
     resultInner.classList.add('error');
-    resultInner.innerHTML = `<span class="result-error-text">❌ ${message}</span>`;
     resultBox.style.display = 'block';
   }
 
@@ -703,29 +724,58 @@
     const historyList = document.getElementById('historyList');
 
     if (!history.length) {
-      historyList.innerHTML = `
-        <div class="empty-state">
-          <div class="empty-icon">🔗</div>
-          <div class="empty-text">Your shortened links will appear here</div>
-        </div>`;
+      const empty = document.createElement('div');
+      empty.className = 'empty-state';
+      const emptyIcon = document.createElement('div');
+      emptyIcon.className = 'empty-icon';
+      emptyIcon.textContent = '🔗';
+      const emptyText = document.createElement('div');
+      emptyText.className = 'empty-text';
+      emptyText.textContent = 'Your shortened links will appear here';
+      empty.append(emptyIcon, emptyText);
+      historyList.replaceChildren(empty);
       return;
     }
 
-    historyList.innerHTML = history.map(item => {
-      const shortUrl       = `${API_BASE}/${item.shortCode}`;
+    historyList.replaceChildren(...history.map(item => {
+      const shortUrl = `${API_BASE}/${item.shortCode}`;
       const originalPreview = item.originalUrl.length > 40
         ? item.originalUrl.substring(0, 40) + '...'
         : item.originalUrl;
-      return `
-        <div class="history-item">
-          <div class="history-icon">🔗</div>
-          <div class="history-content">
-            <a href="${shortUrl}" target="_blank" class="history-short">${shortUrl}</a>
-            <div class="history-original" title="${item.originalUrl}">${originalPreview}</div>
-          </div>
-          <div class="history-clicks"><span>${item.clicks || 0}</span> clicks</div>
-        </div>`;
-    }).join('');
+
+      const row = document.createElement('div');
+      row.className = 'history-item';
+
+      const icon = document.createElement('div');
+      icon.className = 'history-icon';
+      icon.textContent = '🔗';
+
+      const content = document.createElement('div');
+      content.className = 'history-content';
+
+      const link = document.createElement('a');
+      link.className = 'history-short';
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.href = shortUrl;
+      link.textContent = shortUrl;
+
+      const original = document.createElement('div');
+      original.className = 'history-original';
+      original.title = item.originalUrl;
+      original.textContent = originalPreview;
+
+      content.append(link, original);
+
+      const clicks = document.createElement('div');
+      clicks.className = 'history-clicks';
+      const count = document.createElement('span');
+      count.textContent = String(item.clicks || 0);
+      clicks.append(count, ' clicks');
+
+      row.append(icon, content, clicks);
+      return row;
+    }));
   }
 
   function clearHistory() {
