@@ -34,6 +34,7 @@ jobs:
 
       - name: Verify the app starts and serves a redirect
         run: |
+          alembic upgrade head
           uvicorn main:app --port 8000 &
           for _ in $(seq 1 20); do
             curl -sf localhost:8000/health >/dev/null && break
@@ -48,3 +49,20 @@ jobs:
           test "$STATUS" = "302" || { echo "expected 302, got $STATUS"; exit 1; }
         env:
           DATABASE_URL: sqlite:///./ci.db
+
+      - name: Verify the container's serving command
+        run: |
+          pip install -r requirements-prod.txt
+          alembic upgrade head
+          gunicorn main:app --worker-class uvicorn_worker.UvicornWorker \
+            --workers 2 --bind 0.0.0.0:8001 --access-logfile - &
+          for _ in $(seq 1 20); do
+            curl -sf localhost:8001/health >/dev/null && break
+            sleep 1
+          done
+          curl -sf localhost:8001/health | grep -q '"database": *"ok"' \
+            || { echo "health did not report a reachable database"; exit 1; }
+        env:
+          DATABASE_URL: sqlite:///./ci-prod.db
+          ENVIRONMENT: production
+          FRONTEND_URL: http://localhost:8001
