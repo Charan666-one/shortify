@@ -3,9 +3,8 @@
 Status: **not production ready**. This document tracks what stands between the
 current code and a deployment that can be trusted with real links.
 
-**Progress:** Phases 1-4 complete (21/30). Phases 5-6 open, 9 items remaining.
-The service is correct, tested and hardened; what is left is running it
-somewhere (Phase 5) and describing it accurately (Phase 6).
+**Progress:** Phases 1-5 complete (26/30). Phase 6 open, 4 items remaining —
+all documentation. The service is correct, tested, hardened and deployable.
 
 - **Baseline:** commit `7d2c0a1` — the last state before hardening began.
   `git checkout 7d2c0a1` restores it at any time. The annotated tag
@@ -179,20 +178,41 @@ database — the same migration caveat as `created_at`.
 
 ## Phase 5 — Operability (P1)
 
-- [ ] **Add a `Dockerfile`** (slim base, non-root user, `uvicorn` entrypoint) and
+- [x] **Add a `Dockerfile`** (slim base, non-root user, `uvicorn` entrypoint) and
       a `docker-compose.yml` pairing it with Postgres for local parity.
-- [ ] **Add Alembic.** `Base.metadata.create_all` (`main.py:67`) creates tables
+- [x] **Add Alembic.** `Base.metadata.create_all` (`main.py:67`) creates tables
       but never alters them, so the `created_at` column from Phase 2 will not
       appear on any existing database.
-- [ ] **Serve structured logs.** `logging.basicConfig` at `main.py:29` emits
+- [x] **Serve structured logs.** `logging.basicConfig` at `main.py:29` emits
       unparseable text; JSON logs with a request id make production debugging
       possible.
-- [ ] **Extend `/health` to check the database.** It currently returns `ok`
+- [x] **Extend `/health` to check the database.** It currently returns `ok`
       whenever the process is alive, including when the database is unreachable
       — so a load balancer keeps routing to a broken instance.
-- [ ] **Move handlers to `Depends(get_db)`.** Every endpoint opens
+- [x] **Move handlers to `Depends(get_db)`.** Every endpoint opens
       `SessionLocal()` by hand in a `try/finally` (`main.py:143`, `:207`, `:253`);
       a dependency removes the repetition and guarantees cleanup.
+
+**Done**, with one item verified less thoroughly than the rest.
+
+The migration was exercised by upgrade, autogenerate (no drift), downgrade to
+base and upgrade again, and `tests/test_migrations.py` now migrates a throwaway
+database and asserts the columns match the models — the check that would have
+caught `created_at` shipping as a lie.
+
+**The container image was never built.** This environment has a docker CLI but
+no daemon. What was verified: `docker compose config` parses, and the image's
+serving command — `alembic upgrade head` then gunicorn with two uvicorn workers
+— was run directly against the pinned requirements, answering `/health` with a
+reachable database and a 302 on redirect. CI runs that same command as a step.
+The parts still unproven are Dockerfile-specific: the base image, the apt
+layer, the non-root uid, and the curl healthcheck. Build it once before
+trusting it.
+
+Writing the logging middleware introduced a bug that its own test then caught:
+the request summary line logged after the context variable was reset, so the
+one line describing the whole request carried no request id while the response
+header did.
 
 ---
 
