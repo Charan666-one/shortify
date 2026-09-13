@@ -30,7 +30,9 @@ def test_postgres_gets_no_sqlite_arguments():
 
 
 def test_health_endpoint_reports_the_environment(client):
-    assert client.get("/health").json() == {"status": "ok", "environment": "development"}
+    assert client.get("/health").json() == {
+        "status": "ok", "environment": "development", "database": "ok",
+    }
 
 
 def test_every_setting_is_documented_in_env_example():
@@ -46,3 +48,35 @@ def test_every_setting_is_documented_in_env_example():
     ))
 
     assert not used - documented, f"undocumented settings: {sorted(used - documented)}"
+
+
+def test_health_reports_degraded_when_the_database_is_unreachable(client):
+    """A health check that only proves the process is alive is worse than none.
+
+    A load balancer keeps routing traffic to an instance whose database has
+    gone away, because the process itself still answers.
+    """
+    from sqlalchemy.exc import OperationalError
+
+    import database
+    import main
+
+    class BrokenSession:
+        def execute(self, *args, **kwargs):
+            raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+
+        def close(self):
+            pass
+
+    main.app.dependency_overrides[database.get_db] = lambda: BrokenSession()
+    try:
+        response = client.get("/health")
+    finally:
+        main.app.dependency_overrides.clear()
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "degraded",
+        "environment": "development",
+        "database": "unreachable",
+    }

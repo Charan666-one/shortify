@@ -7,19 +7,23 @@ import socket
 import string
 import threading
 import time
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.orm import Session
 
-from database import SessionLocal, engine
-from models import URL, Base
+from database import engine, get_db
+from logging_config import configure_logging, new_request_id, request_id_var
+from models import URL
 
 # ✅ Load environment variables
 load_dotenv()
@@ -44,14 +48,32 @@ TRUST_PROXY_HEADERS = os.getenv("TRUST_PROXY_HEADERS", "false").lower() == "true
 
 
 # ✅ Configure logging
-logging.basicConfig(level=logging.INFO)
+configure_logging(ENVIRONMENT)
 logger = logging.getLogger(__name__)
+
+# Schema is owned by Alembic, not create_all(): create_all makes tables but
+# never alters them, so it silently skips every column added after the first
+# deploy. Run `alembic upgrade head` before starting the app.
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Fail loudly at startup rather than confusingly on the first request."""
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1 FROM urls LIMIT 1"))
+    except SQLAlchemyError:
+        logger.error(
+            "The 'urls' table is missing or unreadable. Run "
+            "'alembic upgrade head' before serving traffic."
+        )
+    yield
+
 
 # ✅ Initialize FastAPI app
 app = FastAPI(
     title="URL Shortener (Snip)",
     description="A fast, production-ready URL shortening service",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 # ✅ CORS Configuration — origins must include scheme (http://)
@@ -82,16 +104,34 @@ if ENVIRONMENT == "production" and FRONTEND_URL == "http://localhost:3000":
 
 # ✅ Request logging middleware
 @app.middleware("http")
-async def log_requests(request, call_next):
-    logger.info(f"{request.method} {request.url.path}")
-    response = await call_next(request)
-    return response
+async def log_requests(request: Request, call_next):
+    # Reuse an upstream id when a proxy or client supplies one, so a single
+    # request stays traceable across services.
+    request_id = request.headers.get("x-request-id") or new_request_id()
+    token = request_id_var.set(request_id)
+    started = time.monotonic()
+    try:
+        response = await call_next(request)
+
+        # Log before resetting the context variable, or this line — the one
+        # summarising the whole request — is the only one without its id.
+        duration_ms = round((time.monotonic() - started) * 1000, 2)
+        logger.info(
+            f"{request.method} {request.url.path} {response.status_code}",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": response.status_code,
+                "duration_ms": duration_ms,
+            },
+        )
+        response.headers["X-Request-ID"] = request_id
+        return response
+    finally:
+        request_id_var.reset(token)
 
 # ✅ Serve frontend static files
 app.mount("/static", StaticFiles(directory="static", html=True), name="static")
-
-# ✅ Create DB tables
-Base.metadata.create_all(bind=engine)
 
 # ✅ Pydantic models
 class ShortenRequest(BaseModel):
@@ -365,9 +405,26 @@ def read_root():
 
 
 @app.get("/health", tags=["health"])
-def health_check():
-    """Health check for uptime monitoring."""
-    return {"status": "ok", "environment": ENVIRONMENT}
+def health_check(db: Session = Depends(get_db)):
+    """Readiness check for load balancers and uptime monitoring.
+
+    Reports the database, not just the process: an instance whose database is
+    unreachable answers every request with a 500, and a health check that only
+    proves the process is alive keeps traffic pointed at it.
+    """
+    try:
+        db.execute(text("SELECT 1"))
+    except SQLAlchemyError as exc:
+        logger.error(f"Health check failed: {exc}")
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "status": "degraded",
+                "environment": ENVIRONMENT,
+                "database": "unreachable",
+            },
+        )
+    return {"status": "ok", "environment": ENVIRONMENT, "database": "ok"}
 
 
 @app.post(
@@ -382,11 +439,11 @@ def health_check():
         500: {"model": ErrorResponse, "description": "Server error"},
     }
 )
-def shorten_url(request: Request, payload: ShortenRequest):
+def shorten_url(request: Request, payload: ShortenRequest,
+                db: Session = Depends(get_db)):
     """Create a shortened URL."""
     enforce_rate_limit(request)
 
-    db = SessionLocal()
     try:
         if not payload.original_url.strip():
             raise HTTPException(
@@ -454,8 +511,6 @@ def shorten_url(request: Request, payload: ShortenRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred while creating the short URL"
         ) from e
-    finally:
-        db.close()
 
 
 @app.get(
@@ -466,9 +521,8 @@ def shorten_url(request: Request, payload: ShortenRequest):
         404: {"model": ErrorResponse, "description": "Short code not found"},
     }
 )
-def get_url_stats(short_code: str):
+def get_url_stats(short_code: str, db: Session = Depends(get_db)):
     """Get click stats for a shortened URL."""
-    db = SessionLocal()
     try:
         url = db.query(URL).filter(URL.short_code == short_code).first()
         if not url:
@@ -492,8 +546,6 @@ def get_url_stats(short_code: str):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred while fetching stats"
         ) from e
-    finally:
-        db.close()
 
 
 @app.get(
@@ -506,7 +558,7 @@ def get_url_stats(short_code: str):
         400: {"model": ErrorResponse, "description": "Invalid short code"},
     }
 )
-def redirect_url(short_code: str):
+def redirect_url(short_code: str, db: Session = Depends(get_db)):
     """Redirect to original URL and increment click count."""
     if short_code.lower() in RESERVED_CODES:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
@@ -517,7 +569,6 @@ def redirect_url(short_code: str):
             detail="Short code cannot be empty"
         )
 
-    db = SessionLocal()
     try:
         url = db.query(URL).filter(URL.short_code == short_code).first()
         if not url:
@@ -554,8 +605,6 @@ def redirect_url(short_code: str):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred during redirect"
         ) from e
-    finally:
-        db.close()
 
 
 # ✅ Global HTTP exception handler

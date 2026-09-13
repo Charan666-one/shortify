@@ -45,3 +45,17 @@ SessionLocal = sessionmaker(
 )
 
 Base = declarative_base()
+
+
+def get_db():
+    """Yield a session and always close it.
+
+    A FastAPI dependency rather than a SessionLocal() call in each handler:
+    one place to change when pooling, retries or a read replica arrive, and no
+    way to forget the try/finally.
+    """
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
