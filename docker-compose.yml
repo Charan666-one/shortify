@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: shortify
+      POSTGRES_PASSWORD: shortify
+      POSTGRES_DB: shortify
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shortify"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: postgresql+psycopg2://shortify:shortify@db:5432/shortify
+      BACKEND_URL: http://localhost:8000
+      FRONTEND_URL: http://localhost:8000
+      LOG_FORMAT: json
+      # The app is behind compose's network here, not a real proxy, so the
+      # forwarded header stays untrusted.
+      TRUST_PROXY_HEADERS: "false"
+    depends_on:
+      db:
+        # Wait for the database to accept connections, not merely to start:
+        # otherwise the migration step races the server's first boot.
+        condition: service_healthy
+
+volumes:
+  pgdata:

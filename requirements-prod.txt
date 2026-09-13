@@ -1,0 +1,5 @@
+# Serving dependencies, needed in the container but not for local development.
+# uvicorn-worker rather than uvicorn.workers: the in-tree module still imports
+# but warns that it is deprecated in favour of this package.
+gunicorn==26.2.0
+uvicorn-worker==0.4.0

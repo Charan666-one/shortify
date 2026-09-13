@@ -1,0 +1,16 @@
+.git
+.github
+.venv
+venv
+__pycache__
+*.pyc
+*.db
+*.sqlite3
+.env
+.env.local
+.pytest_cache
+.coverage
+htmlcov
+tests
+docs
+*.md
